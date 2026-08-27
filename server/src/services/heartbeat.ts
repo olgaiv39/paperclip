@@ -19298,7 +19298,7 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
       errorCode,
       ...(resultJson ? { resultJson } : {}),
     });
-    if (!cancellation.updated) return cancellation.run;
+    if (!cancellation.updated) return null;
     const cancelled = cancellation.run;
 
     await setWakeupStatus(run.wakeupRequestId, "cancelled", {

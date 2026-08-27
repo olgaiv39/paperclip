@@ -3174,7 +3174,7 @@ export function issueRoutes(
 
     try {
       const cancelled = await heartbeat.cancelRun(scheduledRetryRunId);
-      const cancelledRunId = cancelled?.id ?? scheduledRetryRunId;
+      if (!cancelled) return null;
       await logActivity(db, {
         companyId: input.issue.companyId,
         actorType: input.actor.actorType,
@@ -3184,14 +3184,14 @@ export function issueRoutes(
         agentApiKeyId: input.actor.agentApiKeyId,
         action: "heartbeat.cancelled",
         entityType: "heartbeat_run",
-        entityId: cancelledRunId,
+        entityId: cancelled.id,
         issueId: input.issue.id,
         details: {
           source: "issue_comment_scheduled_retry_superseded",
           issueId: input.issue.id,
         },
       });
-      return cancelledRunId;
+      return cancelled.id;
     } catch (err) {
       logger.error(
         { err, issueId: input.issue.id, runId: scheduledRetryRunId },

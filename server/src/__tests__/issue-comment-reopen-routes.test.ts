@@ -977,6 +977,53 @@ describe.sequential("issue comment reopen routes", () => {
     ));
   });
 
+  it("does not record scheduled-retry cancellation when cancelRun loses its terminal race", async () => {
+    const issue = {
+      ...makeIssue("in_progress"),
+      executionRunId: "retry-run-1",
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.getCurrentScheduledRetry.mockResolvedValue({
+      runId: "retry-run-1",
+      status: "scheduled_retry",
+      agentId: "22222222-2222-4222-8222-222222222222",
+      agentName: "CodexCoder",
+      retryOfRunId: "source-run-1",
+      scheduledRetryAt: new Date("2026-05-18T14:00:00.000Z"),
+      scheduledRetryAttempt: 1,
+      scheduledRetryReason: "transient_failure",
+      error: null,
+      errorCode: null,
+    });
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+      ...issue,
+      ...patch,
+      updatedAt: new Date(),
+    }));
+    mockHeartbeatService.cancelRun.mockResolvedValue(null);
+
+    const res = await request(await installActor(createApp()))
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
+      .send({ body: "I added the missing detail; please continue." });
+
+    expect(res.status).toBe(201);
+    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("retry-run-1");
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "heartbeat.cancelled" }),
+    );
+    expect(mockLogActivity).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: "issue.updated",
+        details: expect.objectContaining({
+          scheduledRetrySupersededByComment: true,
+          scheduledRetryRunId: "retry-run-1",
+        }),
+      }),
+    );
+  });
+
   it("does not move scheduled-retry issues to todo when POST comment retry cancellation fails", async () => {
     const issue = {
       ...makeIssue("in_progress"),

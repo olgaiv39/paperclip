@@ -5019,8 +5019,7 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       await finalizeRunningRun(runId, status, resultJson);
       cancellationWrite.release();
 
-      const cancellationResult = await cancelling;
-      expect(cancellationResult).toMatchObject({ status, resultJson });
+      await expect(cancelling).resolves.toBeNull();
 
       const [run, wakeup, issue, events] = await Promise.all([
         heartbeat.getRun(runId),
