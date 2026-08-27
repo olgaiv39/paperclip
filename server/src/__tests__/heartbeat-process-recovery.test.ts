@@ -574,6 +574,67 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     return { companyId, agentId, runId, wakeupRequestId, issueId };
   }
 
+  function pauseNextHeartbeatRunUpdate() {
+    let observedResolve!: () => void;
+    let releaseResolve!: () => void;
+    const observed = new Promise<void>((resolve) => {
+      observedResolve = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseResolve = resolve;
+    });
+    const originalUpdate = db.update.bind(db);
+    let paused = false;
+    const updateSpy = vi.spyOn(db, "update").mockImplementation(((...args: Parameters<typeof db.update>) => {
+      const wrap = (query: unknown): unknown => new Proxy(query as object, {
+        get(target, property, receiver) {
+          const value = Reflect.get(target, property, receiver);
+          if (typeof value !== "function") return value;
+          return (...methodArgs: unknown[]) => {
+            if (property === "returning" && !paused) {
+              paused = true;
+              observedResolve();
+              return (async () => {
+                await release;
+                return value.apply(target, methodArgs);
+              })();
+            }
+            if (property === "returning") return value.apply(target, methodArgs);
+            const result = value.apply(target, methodArgs);
+            return result && typeof result === "object" ? wrap(result) : result;
+          };
+        },
+      });
+      return wrap(originalUpdate(...args));
+    }) as typeof db.update);
+
+    return {
+      observed,
+      release: () => releaseResolve(),
+      restore: () => updateSpy.mockRestore(),
+    };
+  }
+
+  async function finalizeRunningRun(
+    runId: string,
+    status: "succeeded" | "failed",
+    resultJson: Record<string, unknown>,
+  ) {
+    const [finalized] = await db
+      .update(heartbeatRuns)
+      .set({
+        status,
+        finishedAt: new Date("2026-03-19T00:05:00.000Z"),
+        errorCode: status === "failed" ? "recognizable_finalizer_failure" : null,
+        error: status === "failed" ? "recognizable finalizer failure" : null,
+        resultJson,
+        updatedAt: new Date("2026-03-19T00:05:00.000Z"),
+      })
+      .where(and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.status, "running")))
+      .returning();
+    expect(finalized).toBeDefined();
+  }
+
   async function seedEnvironmentLeaseFixture(input: {
     companyId: string;
     runId: string;
@@ -4937,6 +4998,83 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
       expect(runningProcesses.has(runId)).toBe(false);
     } finally {
       updateSpy.mockRestore();
+    }
+  });
+
+  it.each([
+    ["succeeded", { terminalMarker: "successful-finalizer-metadata" }],
+    ["failed", { terminalMarker: "failed-finalizer-metadata", failureDetail: "recognizable failure" }],
+  ] as const)("does not let cancelRun overwrite a concurrently finalized %s run", async (status, resultJson) => {
+    const { runId, wakeupRequestId, issueId } = await seedRunFixture({
+      agentStatus: "running",
+      includeIssue: true,
+    });
+    const heartbeat = heartbeatService(db);
+    const cancellationWrite = pauseNextHeartbeatRunUpdate();
+
+    try {
+      const cancelling = heartbeat.cancelRun(runId, "Cancellation that loses the terminal race");
+      await cancellationWrite.observed;
+
+      await finalizeRunningRun(runId, status, resultJson);
+      cancellationWrite.release();
+
+      const cancellationResult = await cancelling;
+      expect(cancellationResult).toMatchObject({ status, resultJson });
+
+      const [run, wakeup, issue, events] = await Promise.all([
+        heartbeat.getRun(runId),
+        db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeupRequestId)).then((rows) => rows[0] ?? null),
+        db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null),
+        db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, runId)),
+      ]);
+      expect(run).toMatchObject({ status, resultJson });
+      expect(wakeup).toMatchObject({ status: "claimed" });
+      expect(events).toHaveLength(0);
+      expect(issue).toMatchObject({
+        status: "in_progress",
+        checkoutRunId: runId,
+        executionRunId: runId,
+      });
+    } finally {
+      cancellationWrite.restore();
+    }
+  });
+
+  it("does not count or clean up a run that finalizes after cancelActiveForAgent selects it", async () => {
+    const { agentId, runId, wakeupRequestId, issueId } = await seedRunFixture({
+      agentStatus: "running",
+      includeIssue: true,
+    });
+    const heartbeat = heartbeatService(db);
+    const cancellationWrite = pauseNextHeartbeatRunUpdate();
+
+    try {
+      const cancelling = heartbeat.cancelActiveForAgent(agentId, "Agent pause that loses the terminal race");
+      await cancellationWrite.observed;
+
+      const resultJson = { terminalMarker: "active-cancellation-race-finalizer" };
+      await finalizeRunningRun(runId, "succeeded", resultJson);
+      cancellationWrite.release();
+
+      await expect(cancelling).resolves.toBe(0);
+
+      const [run, wakeup, issue, events] = await Promise.all([
+        heartbeat.getRun(runId),
+        db.select().from(agentWakeupRequests).where(eq(agentWakeupRequests.id, wakeupRequestId)).then((rows) => rows[0] ?? null),
+        db.select().from(issues).where(eq(issues.id, issueId)).then((rows) => rows[0] ?? null),
+        db.select().from(heartbeatRunEvents).where(eq(heartbeatRunEvents.runId, runId)),
+      ]);
+      expect(run).toMatchObject({ status: "succeeded", resultJson });
+      expect(wakeup).toMatchObject({ status: "claimed" });
+      expect(events).toHaveLength(0);
+      expect(issue).toMatchObject({
+        status: "in_progress",
+        checkoutRunId: runId,
+        executionRunId: runId,
+      });
+    } finally {
+      cancellationWrite.restore();
     }
   });
 
