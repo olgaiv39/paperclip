@@ -3173,8 +3173,9 @@ export function issueRoutes(
     if (!scheduledRetryRunId) return null;
 
     try {
-      const cancelled = await heartbeat.cancelRun(scheduledRetryRunId);
-      if (!cancelled) return null;
+      const cancellation = await heartbeat.cancelRunWithOutcome(scheduledRetryRunId);
+      const cancelled = cancellation.run;
+      if (!cancellation.cancelled || !cancelled) return null;
       await logActivity(db, {
         companyId: input.issue.companyId,
         actorType: input.actor.actorType,
@@ -9575,12 +9576,13 @@ export function issueRoutes(
 
       const runToInterrupt = await resolveActiveIssueRun(existing);
       if (runToInterrupt) {
-        const cancelled = await heartbeat.cancelRun(
+        const cancellation = await heartbeat.cancelRunWithOutcome(
           runToInterrupt.id,
           "Interrupted by board comment",
           operatorInterruptCancelOptions({ issueId: existing.id, actor }),
         );
-        if (cancelled) {
+        const cancelled = cancellation.run;
+        if (cancellation.cancelled && cancelled) {
           interruptedRunId = cancelled.id;
           await logActivity(db, {
             companyId: cancelled.companyId,
@@ -10038,8 +10040,9 @@ export function issueRoutes(
     let cancelledStatusRunId: string | null = null;
     if (runToCancelForCancelledStatus) {
       try {
-        const cancelled = await heartbeat.cancelRun(runToCancelForCancelledStatus.id);
-        if (cancelled) {
+        const cancellation = await heartbeat.cancelRunWithOutcome(runToCancelForCancelledStatus.id);
+        const cancelled = cancellation.run;
+        if (cancellation.cancelled && cancelled) {
           cancelledStatusRunId = cancelled.id;
           await logActivity(db, {
             companyId: cancelled.companyId,
@@ -12336,12 +12339,13 @@ export function issueRoutes(
 
       const runToInterrupt = await resolveActiveIssueRun(currentIssue);
       if (runToInterrupt) {
-        const cancelled = await heartbeat.cancelRun(
+        const cancellation = await heartbeat.cancelRunWithOutcome(
           runToInterrupt.id,
           "Interrupted by board comment",
           operatorInterruptCancelOptions({ issueId: currentIssue.id, actor }),
         );
-        if (cancelled) {
+        const cancelled = cancellation.run;
+        if (cancellation.cancelled && cancelled) {
           interruptedRunId = cancelled.id;
           await logActivity(db, {
             companyId: cancelled.companyId,

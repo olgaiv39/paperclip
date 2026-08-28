@@ -29,6 +29,7 @@ const mockHeartbeatService = vi.hoisted(() => ({
   getRun: vi.fn(async () => null),
   getActiveRunForAgent: vi.fn(async () => null),
   cancelRun: vi.fn(async () => null),
+  cancelRunWithOutcome: vi.fn(async () => ({ run: null, cancelled: false, attempted: false })),
 }));
 
 const mockAgentService = vi.hoisted(() => ({
@@ -283,6 +284,7 @@ describe.sequential("issue comment reopen routes", () => {
     mockHeartbeatService.getRun.mockReset();
     mockHeartbeatService.getActiveRunForAgent.mockReset();
     mockHeartbeatService.cancelRun.mockReset();
+    mockHeartbeatService.cancelRunWithOutcome.mockReset();
     mockAgentService.getById.mockReset();
     mockAgentService.list.mockReset();
     mockAgentService.resolveByReference.mockReset();
@@ -324,6 +326,7 @@ describe.sequential("issue comment reopen routes", () => {
     mockHeartbeatService.getRun.mockResolvedValue(null);
     mockHeartbeatService.getActiveRunForAgent.mockResolvedValue(null);
     mockHeartbeatService.cancelRun.mockResolvedValue(null);
+    mockHeartbeatService.cancelRunWithOutcome.mockResolvedValue({ run: null, cancelled: false, attempted: false });
     mockExternalObjectService.syncCommentSafely.mockResolvedValue(undefined);
     mockExternalObjectService.syncIssueSafely.mockResolvedValue(undefined);
     mockObserveCrossIssueInfluence.mockResolvedValue({
@@ -932,11 +935,10 @@ describe.sequential("issue comment reopen routes", () => {
       ...patch,
       updatedAt: new Date(),
     }));
-    mockHeartbeatService.cancelRun.mockResolvedValue({
-      id: "retry-run-1",
-      companyId: "company-1",
-      agentId: "22222222-2222-4222-8222-222222222222",
-      status: "cancelled",
+    mockHeartbeatService.cancelRunWithOutcome.mockResolvedValue({
+      run: { id: "retry-run-1", companyId: "company-1", agentId: "22222222-2222-4222-8222-222222222222", status: "cancelled" },
+      cancelled: true,
+      attempted: true,
     });
 
     const res = await request(await installActor(createApp()))
@@ -948,7 +950,7 @@ describe.sequential("issue comment reopen routes", () => {
       "11111111-1111-4111-8111-111111111111",
       { status: "todo" },
     );
-    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("retry-run-1");
+    expect(mockHeartbeatService.cancelRunWithOutcome).toHaveBeenCalledWith("retry-run-1");
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -977,7 +979,7 @@ describe.sequential("issue comment reopen routes", () => {
     ));
   });
 
-  it("does not record scheduled-retry cancellation when cancelRun loses its terminal race", async () => {
+  it("does not attribute a scheduled-retry cancellation already owned by another path", async () => {
     const issue = {
       ...makeIssue("in_progress"),
       executionRunId: "retry-run-1",
@@ -1000,14 +1002,18 @@ describe.sequential("issue comment reopen routes", () => {
       ...patch,
       updatedAt: new Date(),
     }));
-    mockHeartbeatService.cancelRun.mockResolvedValue(null);
+    mockHeartbeatService.cancelRunWithOutcome.mockResolvedValue({
+      run: { id: "retry-run-1", companyId: "company-1", agentId: "22222222-2222-4222-8222-222222222222", status: "cancelled" },
+      cancelled: false,
+      attempted: false,
+    });
 
     const res = await request(await installActor(createApp()))
       .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
       .send({ body: "I added the missing detail; please continue." });
 
     expect(res.status).toBe(201);
-    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("retry-run-1");
+    expect(mockHeartbeatService.cancelRunWithOutcome).toHaveBeenCalledWith("retry-run-1");
     expect(mockLogActivity).not.toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ action: "heartbeat.cancelled" }),
@@ -1042,14 +1048,14 @@ describe.sequential("issue comment reopen routes", () => {
       error: null,
       errorCode: null,
     });
-    mockHeartbeatService.cancelRun.mockRejectedValue(new Error("cancel failed"));
+    mockHeartbeatService.cancelRunWithOutcome.mockRejectedValue(new Error("cancel failed"));
 
     const res = await request(await installActor(createApp()))
       .post("/api/issues/11111111-1111-4111-8111-111111111111/comments")
       .send({ body: "I added the missing detail; please continue." });
 
     expect(res.status).toBe(500);
-    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("retry-run-1");
+    expect(mockHeartbeatService.cancelRunWithOutcome).toHaveBeenCalledWith("retry-run-1");
     expect(mockIssueService.update).not.toHaveBeenCalled();
     expect(mockIssueService.addComment).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalledWith(
@@ -1608,11 +1614,10 @@ describe.sequential("issue comment reopen routes", () => {
       ...patch,
       updatedAt: new Date(),
     }));
-    mockHeartbeatService.cancelRun.mockResolvedValue({
-      id: "retry-run-1",
-      companyId: "company-1",
-      agentId: "22222222-2222-4222-8222-222222222222",
-      status: "cancelled",
+    mockHeartbeatService.cancelRunWithOutcome.mockResolvedValue({
+      run: { id: "retry-run-1", companyId: "company-1", agentId: "22222222-2222-4222-8222-222222222222", status: "cancelled" },
+      cancelled: true,
+      attempted: true,
     });
 
     const res = await request(await installActor(createApp()))
@@ -1628,7 +1633,7 @@ describe.sequential("issue comment reopen routes", () => {
         actorUserId: "local-board",
       }),
     );
-    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("retry-run-1");
+    expect(mockHeartbeatService.cancelRunWithOutcome).toHaveBeenCalledWith("retry-run-1");
     await waitForWakeup(() => expect(mockHeartbeatService.wakeup).toHaveBeenCalledWith(
       "22222222-2222-4222-8222-222222222222",
       expect.objectContaining({
@@ -1659,14 +1664,14 @@ describe.sequential("issue comment reopen routes", () => {
       error: null,
       errorCode: null,
     });
-    mockHeartbeatService.cancelRun.mockRejectedValue(new Error("cancel failed"));
+    mockHeartbeatService.cancelRunWithOutcome.mockRejectedValue(new Error("cancel failed"));
 
     const res = await request(await installActor(createApp()))
       .patch("/api/issues/11111111-1111-4111-8111-111111111111")
       .send({ comment: "Retry window is over; please continue." });
 
     expect(res.status).toBe(500);
-    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("retry-run-1");
+    expect(mockHeartbeatService.cancelRunWithOutcome).toHaveBeenCalledWith("retry-run-1");
     expect(mockIssueService.update).not.toHaveBeenCalled();
     expect(mockIssueService.addComment).not.toHaveBeenCalled();
     expect(mockLogActivity).not.toHaveBeenCalledWith(
@@ -2330,11 +2335,10 @@ describe.sequential("issue comment reopen routes", () => {
       agentId: "22222222-2222-4222-8222-222222222222",
       status: "running",
     });
-    mockHeartbeatService.cancelRun.mockResolvedValue({
-      id: "run-1",
-      companyId: "company-1",
-      agentId: "22222222-2222-4222-8222-222222222222",
-      status: "cancelled",
+    mockHeartbeatService.cancelRunWithOutcome.mockResolvedValue({
+      run: { id: "run-1", companyId: "company-1", agentId: "22222222-2222-4222-8222-222222222222", status: "cancelled" },
+      cancelled: true,
+      attempted: true,
     });
 
     const res = await request(await installActor(createApp()))
@@ -2343,7 +2347,7 @@ describe.sequential("issue comment reopen routes", () => {
 
     expect(res.status).toBe(200);
     expect(mockHeartbeatService.getRun).toHaveBeenCalledWith("run-1");
-    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith(
+    expect(mockHeartbeatService.cancelRunWithOutcome).toHaveBeenCalledWith(
       "run-1",
       "Interrupted by board comment",
       expect.objectContaining({
@@ -2374,6 +2378,33 @@ describe.sequential("issue comment reopen routes", () => {
     );
   });
 
+  it("does not attribute an interrupt cancellation already owned by another path", async () => {
+    const issue = { ...makeIssue("todo"), executionRunId: "run-1" };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({ ...issue, ...patch }));
+    mockHeartbeatService.getRun.mockResolvedValue({
+      id: "run-1",
+      companyId: "company-1",
+      agentId: "22222222-2222-4222-8222-222222222222",
+      status: "running",
+    });
+    mockHeartbeatService.cancelRunWithOutcome.mockResolvedValue({
+      run: { id: "run-1", companyId: "company-1", agentId: "22222222-2222-4222-8222-222222222222", status: "cancelled" },
+      cancelled: false,
+      attempted: false,
+    });
+
+    const res = await request(await installActor(createApp()))
+      .patch("/api/issues/11111111-1111-4111-8111-111111111111")
+      .send({ comment: "stop", interrupt: true });
+
+    expect(res.status).toBe(200);
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "heartbeat.cancelled" }),
+    );
+  });
+
   it("cancels an active run when an issue is marked cancelled", async () => {
     const issue = {
       ...makeIssue("in_progress"),
@@ -2390,11 +2421,10 @@ describe.sequential("issue comment reopen routes", () => {
       agentId: "22222222-2222-4222-8222-222222222222",
       status: "running",
     });
-    mockHeartbeatService.cancelRun.mockResolvedValue({
-      id: "run-1",
-      companyId: "company-1",
-      agentId: "22222222-2222-4222-8222-222222222222",
-      status: "cancelled",
+    mockHeartbeatService.cancelRunWithOutcome.mockResolvedValue({
+      run: { id: "run-1", companyId: "company-1", agentId: "22222222-2222-4222-8222-222222222222", status: "cancelled" },
+      cancelled: true,
+      attempted: true,
     });
 
     const res = await request(await installActor(createApp()))
@@ -2403,7 +2433,7 @@ describe.sequential("issue comment reopen routes", () => {
 
     expect(res.status).toBe(200);
     expect(mockHeartbeatService.getRun).toHaveBeenCalledWith("run-1");
-    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("run-1");
+    expect(mockHeartbeatService.cancelRunWithOutcome).toHaveBeenCalledWith("run-1");
     expect(mockLogActivity).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -2413,6 +2443,36 @@ describe.sequential("issue comment reopen routes", () => {
           issueId: "11111111-1111-4111-8111-111111111111",
         }),
       }),
+    );
+  });
+
+  it("does not attribute issue-status cancellation when finalization already won", async () => {
+    const issue = {
+      ...makeIssue("in_progress"),
+      executionRunId: "run-1",
+    };
+    mockIssueService.getById.mockResolvedValue(issue);
+    mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({ ...issue, ...patch }));
+    mockHeartbeatService.getRun.mockResolvedValue({
+      id: "run-1",
+      companyId: "company-1",
+      agentId: "22222222-2222-4222-8222-222222222222",
+      status: "running",
+    });
+    mockHeartbeatService.cancelRunWithOutcome.mockResolvedValue({
+      run: { id: "run-1", companyId: "company-1", agentId: "22222222-2222-4222-8222-222222222222", status: "succeeded" },
+      cancelled: false,
+      attempted: true,
+    });
+
+    const res = await request(await installActor(createApp()))
+      .patch("/api/issues/11111111-1111-4111-8111-111111111111")
+      .send({ status: "cancelled" });
+
+    expect(res.status).toBe(200);
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "heartbeat.cancelled" }),
     );
   });
 

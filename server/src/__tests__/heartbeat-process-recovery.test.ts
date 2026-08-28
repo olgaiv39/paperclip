@@ -5135,6 +5135,24 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     });
   });
 
+  it("reports an already-cancelled run without attributing its cancellation to this attempt", async () => {
+    const { runId } = await seedRunFixture({
+      agentStatus: "running",
+      includeIssue: false,
+    });
+    const heartbeat = heartbeatService(db);
+
+    await expect(heartbeat.cancelRunWithOutcome(runId)).resolves.toMatchObject({
+      run: { id: runId, status: "cancelled" },
+      cancelled: true,
+    });
+    await expect(heartbeat.cancelRunWithOutcome(runId)).resolves.toMatchObject({
+      run: { id: runId, status: "cancelled" },
+      cancelled: false,
+      attempted: false,
+    });
+  });
+
   it("records operator interrupt cancellation metadata without changing terminal status", async () => {
     const { runId, issueId } = await seedRunFixture({
       agentStatus: "running",

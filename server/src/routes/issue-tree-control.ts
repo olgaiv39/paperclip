@@ -112,8 +112,9 @@ export function issueTreeControlRoutes(db: Db) {
       for (const heartbeatRunId of interruptedRunIds) {
         const cancellationTask = (async () => {
           try {
-            const cancelled = await heartbeat.cancelRun(heartbeatRunId);
-            if (cancelled?.status !== "cancelled") return;
+            const cancellation = await heartbeat.cancelRunWithOutcome(heartbeatRunId);
+            if (!cancellation.cancelled || !cancellation.run) return;
+            const cancelled = cancellation.run;
             await logActivity(db, {
               companyId: root.companyId,
               actorType: actor.actorType,
