@@ -147,6 +147,10 @@ describe("issue tree control routes", () => {
         ],
       },
     });
+    mockHeartbeatService.cancelRun.mockResolvedValue({
+      id: "44444444-4444-4444-8444-444444444444",
+      status: "cancelled",
+    });
 
     const res = await request(app)
       .post("/api/issues/11111111-1111-4111-8111-111111111111/tree-holds")
@@ -165,6 +169,50 @@ describe("issue tree control routes", () => {
         action: "issue.tree_hold_run_interrupted",
         entityId: "44444444-4444-4444-8444-444444444444",
       }),
+    );
+  });
+
+  it.each([
+    ["returns null", null],
+    ["returns a succeeded terminal run", { id: "44444444-4444-4444-8444-444444444444", status: "succeeded" }],
+    ["returns a failed terminal run", { id: "44444444-4444-4444-8444-444444444444", status: "failed" }],
+  ])("does not report a tree-hold run interruption when cancelRun %s", async (_outcome, cancelRunResult) => {
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      companyIds: ["company-2"],
+      source: "session",
+      isInstanceAdmin: false,
+    });
+    mockTreeControlService.createHold.mockResolvedValue({
+      hold: {
+        id: "33333333-3333-4333-8333-333333333333",
+        mode: "pause",
+        reason: "pause subtree",
+      },
+      preview: {
+        mode: "pause",
+        totals: { affectedIssues: 1 },
+        warnings: [],
+        activeRuns: [
+          {
+            id: "44444444-4444-4444-8444-444444444444",
+            issueId: "11111111-1111-4111-8111-111111111111",
+          },
+        ],
+      },
+    });
+    mockHeartbeatService.cancelRun.mockResolvedValue(cancelRunResult);
+
+    const res = await request(app)
+      .post("/api/issues/11111111-1111-4111-8111-111111111111/tree-holds")
+      .send({ mode: "pause", reason: "pause subtree" });
+
+    expect(res.status).toBe(201);
+    expect(mockHeartbeatService.cancelRun).toHaveBeenCalledWith("44444444-4444-4444-8444-444444444444");
+    expect(mockLogActivity).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ action: "issue.tree_hold_run_interrupted" }),
     );
   });
 

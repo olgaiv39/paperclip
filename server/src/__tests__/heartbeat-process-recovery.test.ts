@@ -5077,6 +5077,47 @@ describeEmbeddedPostgres("heartbeat orphaned process recovery", () => {
     }
   });
 
+  it("does not record a queued tree-hold interruption when cancellation loses its terminal race", async () => {
+    const { companyId, runId, issueId } = await seedQueuedIssueRunFixture();
+    await db.insert(issueTreeHolds).values({
+      companyId,
+      rootIssueId: issueId,
+      mode: "pause",
+      status: "active",
+      reason: "Pause queued work",
+      releasePolicy: { strategy: "manual" },
+    });
+    const heartbeat = heartbeatService(db);
+    const cancellationWrite = pauseNextHeartbeatRunUpdate();
+
+    try {
+      const resuming = heartbeat.resumeQueuedRuns();
+      await cancellationWrite.observed;
+
+      const [claimed] = await db
+        .update(heartbeatRuns)
+        .set({ status: "running", startedAt: new Date("2026-03-19T00:01:00.000Z") })
+        .where(and(eq(heartbeatRuns.id, runId), eq(heartbeatRuns.status, "queued")))
+        .returning();
+      expect(claimed).toBeDefined();
+      await finalizeRunningRun(runId, "succeeded", { terminalMarker: "tree-hold-finalizer" });
+      cancellationWrite.release();
+      await resuming;
+
+      const interruptions = await db
+        .select()
+        .from(activityLog)
+        .where(and(eq(activityLog.runId, runId), eq(activityLog.action, "issue.tree_hold_run_interrupted")));
+      expect(interruptions).toHaveLength(0);
+      await expect(heartbeat.getRun(runId)).resolves.toMatchObject({
+        status: "succeeded",
+        resultJson: { terminalMarker: "tree-hold-finalizer" },
+      });
+    } finally {
+      cancellationWrite.restore();
+    }
+  });
+
   it("records manual cancellation stop metadata", async () => {
     const { runId } = await seedRunFixture({
       agentStatus: "running",

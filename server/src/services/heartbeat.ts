@@ -12698,25 +12698,27 @@ export function heartbeatService(db: Db, options: HeartbeatServiceOptions = {}) 
         contextSnapshot: context,
       });
       if (activePauseHold && !treeHoldInteractionWake) {
-        await cancelRunInternal(run.id, "Cancelled because issue is held by an active subtree pause hold");
-        await logActivity(db, {
-          companyId: run.companyId,
-          actorType: "system",
-          actorId: "system",
-          agentId: run.agentId,
-          runId: run.id,
-          action: "issue.tree_hold_run_interrupted",
-          entityType: "heartbeat_run",
-          entityId: run.id,
-          issueId: issueId,
-          details: {
-            issueId,
-            holdId: activePauseHold.holdId,
-            rootIssueId: activePauseHold.rootIssueId,
-            source: "heartbeat.claim_queued_run",
-            securityPrinciples: ["Complete Mediation", "Fail Securely", "Secure Defaults"],
-          },
-        });
+        const cancelled = await cancelRunInternal(run.id, "Cancelled because issue is held by an active subtree pause hold");
+        if (cancelled?.status === "cancelled") {
+          await logActivity(db, {
+            companyId: run.companyId,
+            actorType: "system",
+            actorId: "system",
+            agentId: run.agentId,
+            runId: run.id,
+            action: "issue.tree_hold_run_interrupted",
+            entityType: "heartbeat_run",
+            entityId: cancelled.id,
+            issueId: issueId,
+            details: {
+              issueId,
+              holdId: activePauseHold.holdId,
+              rootIssueId: activePauseHold.rootIssueId,
+              source: "heartbeat.claim_queued_run",
+              securityPrinciples: ["Complete Mediation", "Fail Securely", "Secure Defaults"],
+            },
+          });
+        }
         return null;
       }
 
